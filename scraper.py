@@ -165,6 +165,7 @@ class GoogleMapsScraper:
             "category": "",
             "address": "",
             "website": "",
+            "email": "",
             "phone": "",
             "PIC": "Scrapper by AI"
         }
@@ -354,6 +355,38 @@ class GoogleMapsScraper:
 
         return business_data
 
+    async def _search_website_for_email(self, website_url: str) -> str:
+        if not website_url or not self.context:
+            return ""
+
+        page = await self.context.new_page()
+        try:
+            await page.goto(website_url, wait_until="domcontentloaded", timeout=20000)
+            await asyncio.sleep(1)
+
+            mailto = await page.query_selector('a[href^="mailto:"]')
+            if mailto:
+                href = await mailto.get_attribute("href")
+                if href and href.lower().startswith("mailto:"):
+                    email = href.split(":", 1)[1].split("?", 1)[0].strip()
+                    if email and re.match(r'^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$', email, re.IGNORECASE):
+                        return email
+
+            body_text = await page.evaluate("document.body ? document.body.innerText : ''")
+            if body_text:
+                match = re.search(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', body_text, re.IGNORECASE)
+                if match:
+                    return match.group(0).strip()
+        except Exception:
+            return ""
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+        return ""
+
     async def _search_instagram_for_phone(self, business_name: str) -> str:
         """
         Search for an Instagram page for the business and try to find a mobile phone number.
@@ -494,7 +527,7 @@ class GoogleMapsScraper:
                     # Try to get additional details from the opened panel
                     try:
                         # Wait for details panel to open (use a more specific selector)
-                        await self.page.wait_for_selector('div[role="main"][aria-label]', timeout=5000)
+                        await self.page.wait_for_selector('div[role="main"][aria-label]', timeout=10000)
                         
                         # Add a small delay to let content render
                         await asyncio.sleep(1)
@@ -516,6 +549,36 @@ class GoogleMapsScraper:
                                         break
                             except:
                                 continue
+
+                        email_selectors = [
+                            'a[href^="mailto:"]',
+                            '[data-item-id^="email:"]',
+                            'button[data-item-id^="email:"]',
+                            'div:has-text("@")'
+                        ]
+
+                        for selector in email_selectors:
+                            try:
+                                email_element = await self.page.query_selector(selector)
+                                if email_element:
+                                    href = await email_element.get_attribute("href")
+                                    if href and href.lower().startswith("mailto:"):
+                                        email_val = href.split(":", 1)[1].split("?", 1)[0].strip()
+                                        if email_val and re.match(r'^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$', email_val, re.IGNORECASE):
+                                            business_data["email"] = email_val
+                                            break
+
+                                    text_val = await email_element.text_content() or await email_element.get_attribute("aria-label")
+                                    if text_val and "@" in text_val:
+                                        match = re.search(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', text_val, re.IGNORECASE)
+                                        if match:
+                                            business_data["email"] = match.group(0).strip()
+                                            break
+                            except:
+                                continue
+
+                        if not business_data["email"] and business_data["website"]:
+                            business_data["email"] = await self._search_website_for_email(business_data["website"])
                         
                         # Extract phone
                         phone_selectors = [
@@ -539,7 +602,6 @@ class GoogleMapsScraper:
                                         
                                     phone_text = await phone_element.text_content() or await phone_element.get_attribute("aria-label")
                                     if phone_text:
-                                        import re
                                         # Look for phone number patterns
                                         phone_match = re.search(r'(?:\+62|0)[\d\s\-]{8,15}', phone_text)
                                         if phone_match:
