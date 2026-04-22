@@ -654,12 +654,28 @@ class GoogleMapsScraper:
     def save_to_csv(self, data: List[Dict], filename: str):
         """Save results to CSV file"""
         df = pd.DataFrame(data)
+        df.insert(0, "no", range(1, len(df) + 1))
         df.to_csv(filename, index=False, encoding='utf-8')
 
     def save_to_excel(self, data: List[Dict], filename: str):
         """Save results to Excel file"""
+        from openpyxl.styles import Font, PatternFill, Alignment
+
         df = pd.DataFrame(data)
-        df.to_excel(filename, index=False, engine='openpyxl')
+        df.insert(0, "no", range(1, len(df) + 1))
+
+        with pd.ExcelWriter(filename, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Results")
+            ws = writer.book["Results"]
+
+            header_fill = PatternFill(fill_type="solid", fgColor="FFFFA500")
+            header_font = Font(bold=True)
+            header_alignment = Alignment(vertical="center")
+
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = header_alignment
 
     def analyze_with_ai(self, results: List[Dict]) -> str:
         """Analyze the scraped results using Groq AI model"""
