@@ -118,40 +118,29 @@ class GoogleMapsScraper:
             return
             
         print("📜 Scrolling to load all results...")
-        
-        # Find the results sidebar
-        sidebar_selector = '[role="main"], .section-layout, [data-pane]'
-        
+
         try:
-            sidebar = await self.page.wait_for_selector(sidebar_selector, timeout=10000)
-            if sidebar:
-                previous_count = 0
-                same_count_iterations = 0
-                max_same_count = 5
-                
-                while same_count_iterations < max_same_count:
-                    # Scroll to bottom of sidebar
-                    await sidebar.evaluate("""
-                        element => {
-                            element.scrollTop = element.scrollHeight;
-                        }
-                    """)
-                    
-                    await self.random_delay()
-                    
-                    # Count current results
-                    current_count = await self.page.locator('[data-result-index]').count()
-                    
-                    if current_count > previous_count:
-                        previous_count = current_count
-                        same_count_iterations = 0
-                        print(f"📊 Loaded {current_count} results so far...")
-                    else:
-                        same_count_iterations += 1
-                    
-                    # Stop if we've reached max results
-                    if current_count >= self.max_results:
-                        break
+            feed = await self.page.wait_for_selector('div[role="feed"]', timeout=10000)
+
+            previous_count = 0
+            same_count_iterations = 0
+            max_same_count = 6
+
+            while same_count_iterations < max_same_count:
+                await feed.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+                await self.random_delay()
+
+                current_count = await self.page.locator('div[role="article"], [data-result-index]').count()
+
+                if current_count > previous_count:
+                    previous_count = current_count
+                    same_count_iterations = 0
+                    print(f"📊 Loaded {current_count} results so far...")
+                else:
+                    same_count_iterations += 1
+
+                if current_count >= self.max_results:
+                    break
                         
         except Exception as e:
             print(f"⚠️  Error during scrolling: {e}")
@@ -487,38 +476,43 @@ class GoogleMapsScraper:
             # Extract business information
             print("🏪 Extracting business information...")
             results = []
-            
-            business_selectors = [
-                '[data-result-index]',
-                '.section-result',
-                '[role="article"]'
-            ]
-            
-            businesses = []
-            for selector in business_selectors:
-                try:
-                    businesses = await self.page.query_selector_all(selector)
-                    if businesses:
-                        break
-                except:
-                    continue
 
-            if not businesses:
+            business_locator = self.page.locator('div[role="article"]')
+            businesses_count = await business_locator.count()
+            if businesses_count == 0:
+                business_locator = self.page.locator('[data-result-index]')
+                businesses_count = await business_locator.count()
+
+            if businesses_count == 0:
                 print("⚠️  No businesses found")
                 return results
 
-            print(f"📋 Found {len(businesses)} businesses")
-            
-            for i, business in enumerate(businesses[:self.max_results]):
+            print(f"📋 Found {businesses_count} businesses")
+
+            limit = min(self.max_results, businesses_count)
+            for i in range(limit):
                 try:
-                    print(f"🔍 Processing business {i + 1}/{len(businesses)}")
+                    print(f"🔍 Processing business {i + 1}/{businesses_count}")
                     
-                    # Click on business to open details
-                    await business.click()
+                    business = business_locator.nth(i)
+                    for attempt in range(2):
+                        try:
+                            await business.scroll_into_view_if_needed()
+                            await business.click()
+                            break
+                        except Exception as e:
+                            if attempt == 0 and "not attached" in str(e).lower():
+                                await asyncio.sleep(0.5)
+                                continue
+                            raise
+
                     await self.random_delay()
+                    business_handle = await business.element_handle()
+                    if not business_handle:
+                        continue
                     
                     # Extract basic info from the list item
-                    business_data = await self.extract_business_info(business)
+                    business_data = await self.extract_business_info(business_handle)
                     
                     # If name is still missing or looks like a block of text, skip it
                     if not business_data["name"] or len(business_data["name"]) > 100:
@@ -655,27 +649,51 @@ class GoogleMapsScraper:
         """Save results to CSV file"""
         df = pd.DataFrame(data)
         df.insert(0, "no", range(1, len(df) + 1))
+        df.columns = [str(c).upper() for c in df.columns]
         df.to_csv(filename, index=False, encoding='utf-8')
 
     def save_to_excel(self, data: List[Dict], filename: str):
         """Save results to Excel file"""
+        from openpyxl.utils import get_column_letter
         from openpyxl.styles import Font, PatternFill, Alignment
 
         df = pd.DataFrame(data)
         df.insert(0, "no", range(1, len(df) + 1))
+        df.columns = [str(c).upper() for c in df.columns]
 
         with pd.ExcelWriter(filename, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Results")
             ws = writer.book["Results"]
 
             header_fill = PatternFill(fill_type="solid", fgColor="FFFFA500")
-            header_font = Font(bold=True)
-            header_alignment = Alignment(vertical="center")
+            header_font = Font(bold=True, size=12)
+            header_alignment = Alignment(vertical="center", wrap_text=True)
 
             for cell in ws[1]:
                 cell.fill = header_fill
                 cell.font = header_font
                 cell.alignment = header_alignment
+
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
+
+            body_alignment = Alignment(vertical="top", wrap_text=True)
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                for cell in row:
+                    cell.alignment = body_alignment
+
+            max_width = 60
+            min_width = 6
+            for col_idx in range(1, ws.max_column + 1):
+                col_letter = get_column_letter(col_idx)
+                max_len = 0
+                for cell in ws[col_letter]:
+                    value = "" if cell.value is None else str(cell.value)
+                    for line in value.splitlines():
+                        if len(line) > max_len:
+                            max_len = len(line)
+                width = max(min_width, min(max_width, max_len + 2))
+                ws.column_dimensions[col_letter].width = width
 
     def analyze_with_ai(self, results: List[Dict]) -> str:
         """Analyze the scraped results using Groq AI model"""
