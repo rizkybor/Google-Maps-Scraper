@@ -151,11 +151,13 @@ class GoogleMapsScraper:
             "name": "",
             "rating": "",
             "reviews_count": "",
-            "category": "",
+            "location_category": "",
+            "facility_category": "",
             "address": "",
             "website": "",
             "email": "",
             "phone": "",
+            "number_division": "",
             "PIC": "Scrapper by AI"
         }
 
@@ -270,7 +272,7 @@ class GoogleMapsScraper:
                                     continue
                                 
                                 # First text-heavy part is likely the category
-                                if not business_data["category"] and len(part) < 50:
+                                if not business_data["location_category"] and len(part) < 50:
                                     # Ensure it's not grabbing the business name or rating
                                     if part != business_data["name"] and not re.match(r'^[\d\.,\s]+(?:\([\d\.,\s]+\))?$', part):
                                         # Sometimes it merges name + rating + category like "First Crack Coffee Rajawali Place  5,0Kedai Kopi"
@@ -282,24 +284,24 @@ class GoogleMapsScraper:
                                             business_data["address"] = clean_cat.strip()
                                         elif not re.search(r'(?i)(Buka|Tutup|pukul)', clean_cat):
                                             # Avoid things like "Buka Kam pukul 08.30" as category
-                                            business_data["category"] = clean_cat.strip() if clean_cat else part.strip()
+                                            business_data["location_category"] = clean_cat.strip() if clean_cat else part.strip()
                                     continue
                                 
                                 # Next part is likely the address
-                                if business_data["category"] and not business_data["address"]:
+                                if business_data["location_category"] and not business_data["address"]:
                                     # Clean up common Google Maps text like "Buka", "Tutup", "Pesan", "Segera tutup"
                                     clean_address = re.sub(r'(Buka|Tutup|Pesan|Segera\s*tutup|Segera).*$', '', part, flags=re.IGNORECASE).strip()
                                     if clean_address and len(clean_address) > 5:
                                         business_data["address"] = clean_address
                                         break
                                         
-                            if business_data["category"] and business_data["address"]:
+                            if business_data["location_category"] and business_data["address"]:
                                 break
                 except:
                     pass
                 
                 # Fallback for category and address if the previous method failed
-                if not business_data["category"] or not business_data["address"]:
+                if not business_data["location_category"] or not business_data["address"]:
                     try:
                         # Extract the aria-label of the entire element, it often contains the structured info
                         aria_label = await business_element.get_attribute("aria-label")
@@ -316,14 +318,14 @@ class GoogleMapsScraper:
                                     continue
                                 
                                 # Category fallback
-                                if not business_data["category"] and len(part) < 40 and not "Buka" in part and not "Tutup" in part:
-                                    business_data["category"] = part
+                                if not business_data["location_category"] and len(part) < 40 and not "Buka" in part and not "Tutup" in part:
+                                    business_data["location_category"] = part
                                     continue
                                     
                                 # Address fallback
                                 if not business_data["address"] and len(part) > 5:
                                     clean_address = re.sub(r'(Buka|Tutup|Pesan|Segera).*$', '', part, flags=re.IGNORECASE).strip()
-                                    if clean_address and clean_address != business_data["category"]:
+                                    if clean_address and clean_address != business_data["location_category"]:
                                         business_data["address"] = clean_address
                                         break
                     except:
@@ -343,6 +345,130 @@ class GoogleMapsScraper:
                 business_data[key] = clean_val
 
         return business_data
+
+    def categorize_facilities_with_ai(self, results: List[Dict]) -> List[Dict]:
+        return self.categorize_location_and_facility_with_ai(results)
+
+    def _infer_facility_category_from_location(self, location_category: str) -> str:
+        t = (location_category or "").strip().lower()
+        if not t:
+            return "Fasilitas Umum"
+        if any(k in t for k in ["apartemen", "apartment", "residence", "residences", "condo", "kondominium"]):
+            return "Apartemen"
+        if any(k in t for k in ["rumah sakit", "hospital", "klinik", "clinic", "puskesmas", "medical", "health", "kesehatan"]):
+            return "Sarana Kesehatan"
+        if any(k in t for k in ["gym", "fitness", "stadion", "stadium", "lapangan", "sport", "olahraga", "basket", "futsal", "badminton", "tenis", "swimming", "renang"]):
+            return "Sarana Olahraga"
+        return "Fasilitas Umum"
+
+    def _is_valid_location_category(self, value: str) -> bool:
+        v = (value or "").strip()
+        if not v:
+            return False
+        if len(v) > 40:
+            return False
+        if any(ch.isdigit() for ch in v):
+            return False
+        lower = v.lower()
+        forbidden = [
+            "http", "@", "buka", "tutup", "pukul", "open", "close", "hours",
+            "jl", "jalan", "rt", "rw", "kav", "no.", "blok", "block", "kecamatan", "kelurahan"
+        ]
+        if any(k in lower for k in forbidden):
+            return False
+        if any(k in v for k in [",", "·", "|"]):
+            return False
+        words = [w for w in re.split(r"\s+", v) if w]
+        if len(words) > 5:
+            return False
+        return True
+
+    def categorize_location_and_facility_with_ai(self, results: List[Dict]) -> List[Dict]:
+        if not results:
+            return results
+
+        if not os.getenv("GROQ_API_KEY"):
+            return results
+
+        llm = ChatGroq(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            temperature=0
+        )
+
+        allowed_facility = ["Sarana Olahraga", "Sarana Kesehatan", "Apartemen", "Fasilitas Umum"]
+
+        batch_size = 25
+        print("🤖 AI categorization: LOCATION_CATEGORY + FACILITY_CATEGORY")
+        for start in range(0, len(results), batch_size):
+            batch = results[start:start + batch_size]
+            payload = []
+            for idx, item in enumerate(batch, start=1):
+                payload.append({
+                    "idx": idx,
+                    "name": item.get("name", ""),
+                    "location_category": item.get("location_category", ""),
+                    "address": item.get("address", ""),
+                    "website": item.get("website", "")
+                })
+
+            system = (
+                "Kamu adalah classifier untuk data tempat dari Google Maps. "
+                "Tugasmu untuk tiap item:\n"
+                "1) Isi location_category (jenis tempat) yang singkat dan rapi (1-4 kata), contoh: Universitas, Kedai Kopi, Apartemen, Rumah Sakit.\n"
+                "2) Isi facility_category yang harus salah satu dari: "
+                + ", ".join(allowed_facility)
+                + ". Jika ragu, pilih Fasilitas Umum.\n"
+                "Jangan masukkan rating, jam buka, atau alamat ke location_category."
+            )
+
+            human = (
+                "Kembalikan JSON array saja (tanpa teks tambahan). "
+                "Format: [{\"idx\":1,\"location_category\":\"Universitas\",\"facility_category\":\"Fasilitas Umum\"}, ...]. "
+                "Berikut datanya:\n"
+                + json.dumps(payload, ensure_ascii=False)
+            )
+
+            try:
+                response = llm.invoke([SystemMessage(content=system), HumanMessage(content=human)])
+                text = (response.content or "").strip()
+
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    left = text.find("[")
+                    right = text.rfind("]")
+                    parsed = json.loads(text[left:right + 1]) if left != -1 and right != -1 and right > left else []
+
+                mapping = {}
+                if isinstance(parsed, list):
+                    for row in parsed:
+                        if not isinstance(row, dict) or "idx" not in row:
+                            continue
+                        idx = int(row["idx"])
+                        mapping[idx] = {
+                            "location_category": str(row.get("location_category", "") or "").strip(),
+                            "facility_category": str(row.get("facility_category", "") or "").strip()
+                        }
+
+                for idx, item in enumerate(batch, start=1):
+                    picked = mapping.get(idx, {})
+                    loc = (picked.get("location_category") or "").strip()
+                    fac = (picked.get("facility_category") or "").strip()
+
+                    if loc:
+                        loc = re.sub(r'(?i)\s*(Buka|Tutup|Pesan|Segera).*$', '', loc).strip()
+                        if self._is_valid_location_category(loc):
+                            item["location_category"] = loc
+
+                    if fac not in allowed_facility:
+                        fac = self._infer_facility_category_from_location(item.get("location_category", ""))
+                    item["facility_category"] = fac
+            except Exception:
+                for item in batch:
+                    if not item.get("facility_category"):
+                        item["facility_category"] = self._infer_facility_category_from_location(item.get("location_category", ""))
+
+        return results
 
     async def _search_website_for_email(self, website_url: str) -> str:
         if not website_url or not self.context:
@@ -366,6 +492,21 @@ class GoogleMapsScraper:
                 match = re.search(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', body_text, re.IGNORECASE)
                 if match:
                     return match.group(0).strip()
+
+            link = await page.query_selector('a[href*="contact"], a[href*="kontak"], a:has-text("Contact"), a:has-text("Kontak")')
+            if link:
+                href = await link.get_attribute("href")
+                if href:
+                    try:
+                        await page.goto(href, wait_until="domcontentloaded", timeout=20000)
+                        await asyncio.sleep(1)
+                        body_text = await page.evaluate("document.body ? document.body.innerText : ''")
+                        if body_text:
+                            match = re.search(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', body_text, re.IGNORECASE)
+                            if match:
+                                return match.group(0).strip()
+                    except Exception:
+                        pass
         except Exception:
             return ""
         finally:
@@ -376,76 +517,211 @@ class GoogleMapsScraper:
 
         return ""
 
-    async def _search_instagram_for_phone(self, business_name: str) -> str:
-        """
-        Search for an Instagram page for the business and try to find a mobile phone number.
-        Returns the mobile number if found, otherwise empty string.
-        """
-        if not self.context:
+    def _extract_email(self, text: str) -> str:
+        if not text:
             return ""
-            
-        print(f"    📱 Searching Instagram for mobile number of: {business_name}...")
-        
-        # Create a new page for Instagram search to avoid disrupting Maps
-        ig_page = await self.context.new_page()
-        mobile_phone = ""
+        match = re.search(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', text, re.IGNORECASE)
+        return match.group(0).strip() if match else ""
+
+    def _infer_number_division(self, text: str) -> str:
+        if not text:
+            return ""
+        t = re.sub(r"\s+", " ", text).strip().lower()
+        candidates = [
+            ("Marketing", ["marketing", "pemasaran", "promo", "promotion"]),
+            ("Business Development", ["business development", "bizdev", "b.d", "partnership", "partnerships", "kerjasama", "kerja sama", "kemitraan", "cooperation"]),
+            ("Humas", ["humas", "public relations", "corporate communication", "corporate communications", "communication", "komunikasi", "corcomm", "media", "press", "pr"]),
+        ]
+        best = ""
+        best_score = 0
+        for label, keys in candidates:
+            score = 0
+            for k in keys:
+                if k in t:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best = label
+        return best if best_score > 0 else ""
+
+    def _pick_preferred_contacts_from_text(self, text: str) -> Dict[str, str]:
+        if not text:
+            return {"phone": "", "email": "", "phone_division": "", "email_division": ""}
+
+        normalized = re.sub(r"\s+", " ", text)
+        lower = normalized.lower()
+
+        def div_priority(div: str) -> int:
+            if div == "Marketing":
+                return 3
+            if div == "Business Development":
+                return 2
+            if div == "Humas":
+                return 1
+            return 0
+
+        def division_for_span(start: int, end: int, value: str) -> tuple[str, int]:
+            left = max(0, start - 90)
+            right = min(len(lower), end + 90)
+            context = lower[left:right]
+            div = self._infer_number_division(context)
+            score = 0
+            if div:
+                score += 3
+            div2 = self._infer_number_division(value)
+            if div2 and div2 != div:
+                div = div2
+                score += 3
+            elif div2:
+                div = div2
+                score += 2
+            return div, score
+
+        best_email = ""
+        best_email_div = ""
+        best_email_score = -1
+
+        for m in re.finditer(r'[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}', normalized, re.IGNORECASE):
+            email = m.group(0).strip()
+            div, score = division_for_span(m.start(), m.end(), email)
+            if score > best_email_score or (score == best_email_score and div_priority(div) > div_priority(best_email_div)):
+                best_email = email
+                best_email_div = div
+                best_email_score = score
+
+        best_phone = ""
+        best_phone_div = ""
+        best_phone_score = -1
+
+        for m in re.finditer(r'(?:\+62\s*8|0\s*8)[\d\s\-\.]{8,18}', normalized):
+            raw = m.group(0)
+            phone = re.sub(r'[^\d\+]', '', raw)
+            if not (phone.startswith("+628") or phone.startswith("08")):
+                continue
+            div, score = division_for_span(m.start(), m.end(), raw)
+            if score > best_phone_score or (score == best_phone_score and div_priority(div) > div_priority(best_phone_div)):
+                best_phone = phone
+                best_phone_div = div
+                best_phone_score = score
+
+        return {"phone": best_phone, "email": best_email, "phone_division": best_phone_div, "email_division": best_email_div}
+
+    def _extract_mobile_phone(self, text: str) -> str:
+        if not text:
+            return ""
+        match = re.search(r'(?:\+62\s*8|0\s*8)[\d\s\-\.]{8,18}', text)
+        if not match:
+            return ""
+        raw = match.group(0)
+        num = re.sub(r'[^\d\+]', '', raw)
+        if num.startswith("0"):
+            num = num
+        if num.startswith("+628") or num.startswith("08"):
+            return num
+        return ""
+
+    async def _search_web_for_contacts(self, business_name: str, website_url: str = "") -> Dict[str, str]:
+        if not self.context:
+            return {"phone": "", "email": "", "phone_division": "", "email_division": ""}
+
+        print(f"    🌐 Searching web for contacts: {business_name}...")
+
+        page = await self.context.new_page()
+        phone = ""
+        email = ""
+        phone_division = ""
+        email_division = ""
         
         try:
-            # We'll use Google search to find the Instagram page
-            # Searching directly on Instagram requires login
-            search_query = urllib.parse.quote(f"{business_name} instagram jakarta")
+            search_query = urllib.parse.quote(
+                f"{business_name} (marketing OR humas OR \"business development\" OR kerjasama) (kontak OR contact) (nomor OR whatsapp OR email)"
+            )
             search_url = f"https://www.google.com/search?q={search_query}"
             
-            await ig_page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
-            
-            # Find the first Instagram link
-            ig_link = await ig_page.query_selector('a[href*="instagram.com/"]')
-            
-            if ig_link:
-                ig_url = await ig_link.get_attribute("href")
-                if ig_url and "instagram.com" in ig_url:
-                    # Often the bio is visible in the Google search snippet itself!
-                    # Let's try to extract from the snippet first to avoid loading IG
-                    snippet_elements = await ig_page.query_selector_all('.VwiC3b, .yXK7lf, .MUxGbd, .aCOpRe')
-                    
-                    for snippet in snippet_elements:
-                        text = await snippet.text_content()
-                        if text:
-                            # Look for Indonesian mobile numbers (08... or +628...)
-                            # Exclude 021...
-                            phone_match = re.search(r'(?:\+62\s*8|0\s*8)[\d\s\-\.]{8,15}', text)
-                            if phone_match:
-                                clean_num = re.sub(r'[^\d\+]', '', phone_match.group(0))
-                                if len(clean_num) >= 10:
-                                    print(f"    ✅ Found mobile number in IG snippet: {clean_num}")
-                                    mobile_phone = clean_num
-                                    break
-                                    
-                    # If not in snippet, try to visit the IG page directly
-                    # Note: IG often blocks automated access without login, but public pages sometimes load
-                    if not mobile_phone:
-                        await ig_page.goto(ig_url, wait_until="domcontentloaded", timeout=20000)
-                        await asyncio.sleep(2) # wait for bio to render
-                        
-                        # Look at the whole page text
-                        body_text = await ig_page.evaluate('document.body.innerText')
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+
+            snippet_elements = await page.query_selector_all('.VwiC3b, .yXK7lf, .MUxGbd, .aCOpRe')
+            for snippet in snippet_elements:
+                text = await snippet.text_content()
+                if text:
+                    picked = self._pick_preferred_contacts_from_text(text)
+                    if picked.get("email") and (not email or (not email_division and picked.get("email_division"))):
+                        email = picked["email"]
+                        email_division = picked.get("email_division", "")
+                    if picked.get("phone") and (not phone or (not phone_division and picked.get("phone_division"))):
+                        phone = picked["phone"]
+                        phone_division = picked.get("phone_division", "")
+                    if phone and email:
+                        break
+
+            if not email:
+                mailto = await page.query_selector('a[href^="mailto:"]')
+                if mailto:
+                    href = await mailto.get_attribute("href")
+                    if href and href.lower().startswith("mailto:"):
+                        candidate = href.split(":", 1)[1].split("?", 1)[0].strip()
+                        if candidate and re.match(r'^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$', candidate, re.IGNORECASE):
+                            email = candidate
+                            email_division = self._infer_number_division(candidate)
+
+            if not phone or not email:
+                result_links = await page.query_selector_all('a[href^="http"]')
+                visited = set()
+
+                if website_url and isinstance(website_url, str) and website_url.startswith("http"):
+                    try:
+                        await page.goto(website_url, wait_until="domcontentloaded", timeout=20000)
+                        await asyncio.sleep(1)
+                        body_text = await page.evaluate("document.body ? document.body.innerText : ''")
+                        picked = self._pick_preferred_contacts_from_text(body_text or "")
+                        if picked.get("email") and (not email or (not email_division and picked.get("email_division"))):
+                            email = picked["email"]
+                            email_division = picked.get("email_division", "")
+                        if picked.get("phone") and (not phone or (not phone_division and picked.get("phone_division"))):
+                            phone = picked["phone"]
+                            phone_division = picked.get("phone_division", "")
+                        visited.add(website_url)
+                    except Exception:
+                        pass
+
+                for link in result_links:
+                    href = await link.get_attribute("href")
+                    if not href:
+                        continue
+                    if "google.com" in href:
+                        continue
+                    if href in visited:
+                        continue
+                    visited.add(href)
+
+                    try:
+                        await page.goto(href, wait_until="domcontentloaded", timeout=20000)
+                        await asyncio.sleep(1)
+                        body_text = await page.evaluate("document.body ? document.body.innerText : ''")
                         if body_text:
-                            # Look for WA or Phone pattern
-                            phone_match = re.search(r'(?:WA|WhatsApp|Call|Hubungi|CP|Phone)?[^\w]?(?:\+62\s*8|0\s*8)[\d\s\-\.]{8,15}', body_text, re.IGNORECASE)
-                            if phone_match:
-                                # Extract just the number part
-                                num_only = re.search(r'(?:\+62\s*8|0\s*8)[\d\s\-\.]{8,15}', phone_match.group(0))
-                                if num_only:
-                                    clean_num = re.sub(r'[^\d\+]', '', num_only.group(0))
-                                    if len(clean_num) >= 10:
-                                        print(f"    ✅ Found mobile number on IG page: {clean_num}")
-                                        mobile_phone = clean_num
+                            picked = self._pick_preferred_contacts_from_text(body_text)
+                            if picked.get("email") and (not email or (not email_division and picked.get("email_division"))):
+                                email = picked["email"]
+                                email_division = picked.get("email_division", "")
+                            if picked.get("phone") and (not phone or (not phone_division and picked.get("phone_division"))):
+                                phone = picked["phone"]
+                                phone_division = picked.get("phone_division", "")
+                        if phone and email:
+                            break
+                    except Exception:
+                        continue
+                    finally:
+                        if len(visited) >= 5:
+                            break
         except Exception as e:
-            print(f"    ⚠️  Error searching Instagram: {e}")
+            print(f"    ⚠️  Error searching web: {e}")
         finally:
-            await ig_page.close()
-            
-        return mobile_phone
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+        return {"phone": phone, "email": email, "phone_division": phone_division, "email_division": email_division}
 
     async def scrape(self, query: str) -> List[Dict]:
         """Main scraping function"""
@@ -573,6 +849,9 @@ class GoogleMapsScraper:
 
                         if not business_data["email"] and business_data["website"]:
                             business_data["email"] = await self._search_website_for_email(business_data["website"])
+
+                        if business_data["email"] and not business_data["number_division"]:
+                            business_data["number_division"] = self._infer_number_division(business_data["email"])
                         
                         # Extract phone
                         phone_selectors = [
@@ -607,20 +886,30 @@ class GoogleMapsScraper:
                     except Exception as e:
                         print(f"⚠️  Could not extract additional details: {e}")
                     
-                    # Logic to handle "021" numbers
-                    if business_data["phone"]:
-                        # Clean the phone number of spaces and dashes to check
-                        clean_phone = business_data["phone"].replace(" ", "").replace("-", "")
-                        if clean_phone.startswith("021") or clean_phone.startswith("+6221"):
-                            print(f"    ℹ️  Found landline number ({business_data['phone']}). Searching for mobile number on IG...")
-                            
-                            ig_phone = await self._search_instagram_for_phone(business_data["name"])
-                            
-                            if ig_phone:
-                                business_data["phone"] = ig_phone
-                            else:
-                                print(f"    ❌ No mobile number found on IG. Clearing the landline number.")
-                                business_data["phone"] = ""
+                    contact_needed = False
+                    clean_phone = business_data["phone"].replace(" ", "").replace("-", "") if business_data["phone"] else ""
+                    if (not business_data["phone"] or clean_phone.startswith("021") or clean_phone.startswith("+6221") or not business_data["email"] or not business_data["number_division"]):
+                        contact_needed = True
+
+                    if contact_needed:
+                        found = await self._search_web_for_contacts(business_data["name"], website_url=business_data.get("website", ""))
+
+                        if found.get("email"):
+                            if not business_data["email"]:
+                                business_data["email"] = found["email"]
+                            elif not business_data["number_division"] and found.get("email_division"):
+                                business_data["email"] = found["email"]
+
+                        if found.get("phone"):
+                            if not business_data["phone"] or clean_phone.startswith("021") or clean_phone.startswith("+6221"):
+                                business_data["phone"] = found["phone"]
+
+                        if not business_data["number_division"]:
+                            business_data["number_division"] = found.get("phone_division") or found.get("email_division") or ""
+
+                    clean_phone = business_data["phone"].replace(" ", "").replace("-", "") if business_data["phone"] else ""
+                    if clean_phone.startswith("021") or clean_phone.startswith("+6221"):
+                        business_data["phone"] = ""
                                 
                     # Close the details panel if possible
                     try:

@@ -23,6 +23,71 @@ def generate_filename(base_name, extension):
     return f"{base_name}_{timestamp}.{extension}"
 
 
+def build_summary(query: str, results: list[dict]) -> str:
+    lines: list[str] = []
+    lines.append("SCRAPING SUMMARY")
+    lines.append(f"QUERY: {query}")
+    lines.append(f"TIMESTAMP: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"TOTAL_ROWS: {len(results)}")
+
+    def non_empty(key: str) -> int:
+        return sum(1 for r in results if str(r.get(key, "") or "").strip())
+
+    lines.append(f"WITH_PHONE: {non_empty('phone')}")
+    lines.append(f"WITH_EMAIL: {non_empty('email')}")
+    lines.append(f"WITH_WEBSITE: {non_empty('website')}")
+
+    def freq(key: str) -> list[tuple[str, int]]:
+        counts: dict[str, int] = {}
+        for r in results:
+            v = str(r.get(key, "") or "").strip()
+            if not v:
+                continue
+            counts[v] = counts.get(v, 0) + 1
+        return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+
+    facility = freq("facility_category")
+    if facility:
+        lines.append("")
+        lines.append("FACILITY_CATEGORY_COUNTS:")
+        for k, c in facility:
+            lines.append(f"- {k}: {c}")
+
+    sports = freq("location_category")
+    if sports:
+        lines.append("")
+        lines.append("LOCATION_CATEGORY_COUNTS:")
+        for k, c in sports[:20]:
+            lines.append(f"- {k}: {c}")
+
+    def to_float(x):
+        try:
+            return float(str(x).strip())
+        except Exception:
+            return None
+
+    scored: list[tuple[float, int, str]] = []
+    for r in results:
+        rating = to_float(r.get("rating", ""))
+        if rating is None:
+            continue
+        rc = r.get("reviews_count", "")
+        try:
+            reviews = int(str(rc).replace(".", "").replace(",", "").strip() or "0")
+        except Exception:
+            reviews = 0
+        scored.append((rating, reviews, str(r.get("name", "") or "").strip()))
+
+    if scored:
+        scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
+        lines.append("")
+        lines.append("TOP_BY_RATING:")
+        for rating, reviews, name in scored[:10]:
+            lines.append(f"- {name} | rating={rating} | reviews={reviews}")
+
+    return "\n".join(lines) + "\n"
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description="Google Maps Scraper - Extract business information from Google Maps"
@@ -62,6 +127,11 @@ async def main():
         action="store_true",
         help="Analyze the scraped results using Groq AI"
     )
+    parser.add_argument(
+        "--ai-categorize",
+        action="store_true",
+        help="Gunakan AI untuk mengisi LOCATION_CATEGORY dan FACILITY_CATEGORY"
+    )
 
     args = parser.parse_args()
 
@@ -96,6 +166,10 @@ async def main():
         if not results:
             print("❌ No results found or scraping failed")
             return
+
+        if args.ai_categorize or os.getenv("AI_CATEGORIZE", "").lower() in ["1", "true", "yes", "y"]:
+            print("🤖 Running AI categorization for LOCATION_CATEGORY and FACILITY_CATEGORY...")
+            results = scraper.categorize_location_and_facility_with_ai(results)
 
         print(f"✅ Successfully scraped {len(results)} businesses")
 
@@ -145,6 +219,19 @@ async def main():
                     print(f"❌ Gagal menyimpan AI analysis (disk penuh): {analysis_path}")
                 else:
                     raise
+
+        summary_filename = generate_filename("summary", "txt")
+        summary_path = os.path.join(output_dir, summary_filename)
+        summary_content = build_summary(args.query, results)
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(summary_content)
+            print(f"📁 Summary saved: {summary_path}")
+        except OSError as e:
+            if getattr(e, "errno", None) == 28:
+                print(f"❌ Gagal menyimpan summary (disk penuh): {summary_path}")
+            else:
+                raise
 
         print("🎉 Scraping completed successfully!")
 
