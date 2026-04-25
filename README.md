@@ -1,169 +1,131 @@
-# Google Maps Scraper 🗺️
+# Google Maps Scraper + Telegram Scrapper BOT AI Professional
 
-A robust Python-based scraper for extracting business information from Google Maps using Playwright. Features anti-detection measures, auto-scrolling, and multiple export formats.
+Python scraper berbasis Playwright untuk mengambil data bisnis dari Google Maps, dengan mode CLI dan mode Telegram Bot yang dibuat untuk penggunaan profesional (command-based, output terstruktur, dan file hasil langsung dikirim lewat Telegram).
 
-## Features ✨
+## Fitur
 
-- **Robust Scraping**: Uses Playwright for reliable browser automation
-- **Anti-Detection**: Custom user-agent, random delays, and stealth scripts
-- **Auto-Scrolling**: Automatically loads all available business results
-- **Multiple Export Formats**: Save data as CSV, Excel, or both
-- **Comprehensive Data Extraction**: Name, Rating, Reviews Count, Category, Address, Website, Phone Number
-- **AI Analysis**: Integrate with Groq LLM (`meta-llama/llama-4-scout-17b-16e-instruct`) to automatically analyze and summarize top scraped businesses
-- **Error Handling**: Graceful handling of missing elements and network issues
-- **Configurable**: Command-line arguments for flexible usage
+- Scraping Google Maps: auto-scroll hasil, ekstraksi data bisnis secara robust
+- Anti-detection: custom user-agent, random delay, dan stealth init script
+- Enrichment kontak: phone/email dari sumber web (jika tersedia) + prioritas divisi (Marketing/Business Development/Humas)
+- Kategori AI (opsional): LOCATION_CATEGORY + FACILITY_CATEGORY memakai Groq LLM
+- Export profesional:
+  - XLSX (header uppercase, styling, wrap, auto-width, freeze header, autofilter)
+  - Summary DOCX (untuk laporan ringkas)
+- Telegram Bot mode:
+  - Input dibatasi command (/start, /help, /scrape) supaya user tidak mengetik sembarang
+  - “Typing…” saat proses scraping berjalan, dan status upload saat kirim dokumen
+  - Output hasil otomatis dikirim sebagai dokumen Telegram (XLSX + DOCX)
 
-## Installation 🚀
-
-### Quick Setup
-```bash
-# Clone or download the project
-cd Google-Maps-Scraper
-
-# Run the automated setup script
-python setup.py
-```
-
-### Manual Setup
-```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install Playwright browsers
-playwright install chromium
-playwright install-deps chromium
-```
-
-## Usage 📖
-
-### Basic Usage
-```bash
-# Scrape restaurants in New York
-python main.py "restaurants in New York"
-
-# Scrape with custom options
-python main.py "coffee shops in Los Angeles" --max-results 100 --headless
-```
-
-### Command Line Options
-```bash
-python main.py --help
-```
-
-**Available Options:**
-- `query` (required): Search query (e.g., "restaurants in New York")
-- `--headless`: Run browser in headless mode (default: False)
-- `--max-results`: Maximum number of results to scrape (default: 50)
-- `--delay`: Delay between interactions in seconds (default: 2.0)
-- `--output-format`: Output format: csv, excel, or both (default: both)
-- `--ai-analyze`: Run AI analysis on the results using Groq LLM (requires `GROQ_API_KEY` in `.env`)
-
-### Examples
+## Instalasi
 
 ```bash
-# Basic search
-python main.py "pizza restaurants in Chicago"
-
-# Search and run AI analysis on the top results
-python main.py "coffee shops in Seattle" --ai-analyze
-
-# Headless mode with more results
-python main.py "hotels in Miami" --headless --max-results 200
-
-# Only CSV output with custom delay
-python main.py "gyms in Seattle" --output-format csv --delay 3
-
-# Excel output only
-python main.py "dentists in Boston" --output-format excel
+python3 -m pip install -r requirements.txt
+python3 -m playwright install chromium
 ```
 
-## Output 📊
+## Konfigurasi (.env)
 
-The scraper extracts the following information for each business:
+Buat file `.env` di root project (jangan commit ke git). Contoh variabel yang dipakai:
 
-- **Name**: Business name
-- **Rating**: Star rating (e.g., 4.5)
-- **Reviews Count**: Number of reviews
-- **Category**: Business category (e.g., Restaurant, Hotel)
-- **Address**: Full address
-- **Website**: Business website (if available)
-- **Phone**: Contact phone number (if available)
+- `OUTPUT_DIRECTORY=output`
+- `DEFAULT_MAX_RESULTS=50`
+- `DEFAULT_DELAY_MIN=1`
+- `DEFAULT_DELAY_MAX=3`
+- `HEADLESS=true`
+- `GROQ_API_KEY=...` (wajib kalau memakai AI categorize)
+- `TELEGRAM_BOT_TOKEN=...` (wajib untuk mode Telegram)
+- `TELEGRAM_ALLOWED_CHAT_IDS=` (opsional; kosong = allow semua)
 
-Output files are saved in the `output/` directory with timestamps:
-- `google_maps_results_YYYYMMDD_HHMMSS.csv`
+## Cara Menjalankan
+
+## Perintah di Terminal
+
+```bash
+# Install dependency Python
+python3 -m pip install -r requirements.txt
+
+# Install browser Playwright
+python3 -m playwright install chromium
+
+# Jalankan Telegram Bot
+python3 main.py --telegram-bot
+
+# Jalankan Mode CLI (XLSX)
+python3 main.py "Universitas di Jakarta Selatan" --max-results 50 --headless --output-format excel
+
+# Jalankan Mode CLI (XLSX + AI categorize)
+python3 main.py "Apartemen di Jakarta Selatan" --max-results 50 --headless --output-format excel --ai-categorize
+```
+
+Utility:
+
+```bash
+# Cek proses bot yang sedang berjalan (hindari Conflict 409 karena dobel polling)
+ps aux | grep "main.py --telegram-bot"
+```
+
+### Mode Telegram Bot (Recommended)
+
+Jalankan bot:
+
+```bash
+python3 main.py --telegram-bot
+```
+
+Perintah di Telegram:
+
+- `/start` atau `/help` untuk instruksi
+- `/scrape <query> | max=50 | headless=1 | ai=1`
+
+Contoh:
+
+```
+/scrape Universitas di Jakarta Selatan | max=10 | ai=1
+```
+
+Output yang diterima user di Telegram:
 - `google_maps_results_YYYYMMDD_HHMMSS.xlsx`
+- `summary_YYYYMMDD_HHMMSS.docx`
 
-## Anti-Detection Features 🛡️
+Catatan opsi:
+- Opsi yang diizinkan hanya: `max`, `headless`, `ai`
+- CSV tidak tersedia di mode Telegram
 
-- **Random Delays**: 1-3 second delays between interactions
-- **Custom User-Agent**: Mimics real Chrome browser
-- **Stealth Scripts**: Removes webdriver properties and adds Chrome runtime
-- **Browser Arguments**: Multiple anti-detection browser flags
-- **Human-like Behavior**: Realistic scrolling and interaction patterns
+### Mode CLI
 
-## Project Structure 📁
+Scrape via terminal:
 
-```
-Google-Maps-Scraper/
-├── main.py              # Entry point with CLI interface
-├── scraper.py           # Core scraping logic
-├── requirements.txt     # Python dependencies
-├── setup.py            # Automated setup script
-├── README.md           # This file
-├── output/             # Output directory (created automatically)
-└── .env                # Configuration file (created by setup)
+```bash
+python3 main.py "Universitas di Jakarta Selatan" --max-results 50 --headless --output-format excel
 ```
 
-## Requirements 📋
+## Data yang Diekstrak
 
-- Python 3.7+
-- Playwright
-- Pandas
-- OpenPyXL
+Field utama yang diekspor (tergantung ketersediaan data):
+- NAME, RATING, REVIEWS_COUNT
+- LOCATION_CATEGORY, FACILITY_CATEGORY
+- ADDRESS, WEBSITE
+- EMAIL, PHONE, NUMBER_DIVISION
+- PIC
 
-## Troubleshooting 🔧
+## Troubleshooting
 
-### Common Issues
+### Telegram Conflict (409): “terminated by other getUpdates request”
 
-1. **Playwright Installation Issues**
-   ```bash
-   # Reinstall Playwright browsers
-   playwright install chromium
-   playwright install-deps chromium
-   ```
+Artinya ada lebih dari satu proses bot yang polling bersamaan.
+- Pastikan hanya satu terminal/mesin yang menjalankan `python3 main.py --telegram-bot`
+- Jika perlu, matikan proses duplikat lalu jalankan ulang
 
-2. **Permission Errors**
-   ```bash
-   # Make scripts executable (Linux/Mac)
-   chmod +x main.py setup.py
-   ```
+### Playwright tidak jalan / browser error
 
-3. **Browser Detection**
-   - Try running with `--headless` flag
-   - Increase delay with `--delay 3`
-   - Use more specific search queries
+```bash
+python3 -m playwright install chromium
+```
 
-4. **No Results Found**
-   - Check your internet connection
-   - Try different search queries
-   - Ensure Google Maps is accessible in your region
+### Disk penuh saat menyimpan file
 
-### Error Handling
+Kosongkan storage (output/caches) lalu coba lagi.
 
-The scraper includes comprehensive error handling for:
-- Missing elements (website, phone, etc.)
-- Network timeouts
-- Browser initialization failures
-- Invalid selectors
+## Legal Notice
 
-## Legal Notice ⚖️
-
-This tool is for educational and research purposes only. Users are responsible for complying with Google's Terms of Service and applicable laws. The authors are not responsible for any misuse of this tool.
-
-## Contributing 🤝
-
-Feel free to submit issues, feature requests, or pull requests to improve the scraper.
-
-## License 📄
-
-This project is open source and available under the MIT License.
+Tool ini dibuat untuk tujuan edukasi dan riset. Pengguna bertanggung jawab untuk mematuhi Terms of Service Google dan hukum yang berlaku.
