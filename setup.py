@@ -14,7 +14,7 @@ def run_command(command, description):
     """Run a shell command with error handling"""
     print(f"📦 {description}...")
     try:
-        result = subprocess.run(
+        subprocess.run(
             command, 
             shell=True, 
             check=True, 
@@ -24,7 +24,13 @@ def run_command(command, description):
         print(f"✅ {description} completed successfully")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error during {description}: {e.stderr}")
+        stdout = (e.stdout or "").strip()
+        stderr = (e.stderr or "").strip()
+        if stdout:
+            print(stdout)
+        if stderr:
+            print(stderr)
+        print(f"❌ Error during {description}")
         return False
 
 
@@ -58,8 +64,11 @@ def install_playwright_browsers():
     if not run_command(f"{sys.executable} -m playwright install chromium", "Installing Chromium browser"):
         return False
     
-    if not run_command(f"{sys.executable} -m playwright install-deps chromium", "Installing Chromium dependencies"):
-        return False
+    if sys.platform.startswith("linux"):
+        if not run_command(f"{sys.executable} -m playwright install-deps chromium", "Installing Chromium dependencies"):
+            return False
+    else:
+        print("ℹ️  Skipping playwright install-deps (only needed on Linux).")
     
     return True
 
@@ -86,7 +95,7 @@ def create_sample_config():
     print("⚙️  Creating sample configuration...")
     
     config_content = """# Google Maps Scraper Configuration
-# You can add your custom settings here
+# Jangan commit file ini ke git.
 
 # Default search settings
 DEFAULT_MAX_RESULTS=50
@@ -94,15 +103,19 @@ DEFAULT_DELAY_MIN=1
 DEFAULT_DELAY_MAX=3
 
 # Browser settings
-HEADLESS=false
+HEADLESS=true
 TIMEOUT=30000
 
 # Output settings
 OUTPUT_FORMAT=both  # csv, excel, or both
 OUTPUT_DIRECTORY=output
 
-# AI Integration
-GROQ_API_KEY=your_groq_api_key_here
+# AI Integration (opsional)
+GROQ_API_KEY=
+
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALLOWED_CHAT_IDS=
 """
     
     config_file = Path(__file__).parent / ".env"
@@ -125,6 +138,11 @@ def verify_installation():
         import playwright
         import pandas
         import openpyxl
+        import docx
+        import telegram
+        import telegram.ext
+        import langchain_groq
+        import langchain_core
         print("✅ All Python dependencies imported successfully")
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -134,7 +152,10 @@ def verify_installation():
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            try:
+                browser = p.chromium.launch(channel="chrome")
+            except Exception:
+                browser = p.chromium.launch()
             browser.close()
         print("✅ Playwright browsers working correctly")
     except Exception as e:
@@ -146,7 +167,7 @@ def verify_installation():
 
 def main():
     """Main setup function"""
-    print("🚀 Google Maps Scraper Setup")
+    print("🚀 Google Maps Scraper Setup (CLI + Telegram Bot)")
     print("=" * 40)
     
     # Check Python version
@@ -176,9 +197,9 @@ def main():
     if success:
         print("🎉 Setup completed successfully!")
         print("\n📖 Usage Instructions:")
-        print("1. Run the scraper: python main.py 'restaurants in New York'")
-        print("2. For headless mode: python main.py 'restaurants in New York' --headless")
-        print("3. For more options: python main.py --help")
+        print("1. Jalankan Telegram Bot: python main.py --telegram-bot")
+        print("2. Jalankan CLI: python main.py 'Universitas di Jakarta Selatan' --output-format excel --headless")
+        print("3. Lihat opsi: python main.py --help")
         print("\n📁 Output files will be saved in the 'output' directory")
     else:
         print("❌ Setup failed. Please check the error messages above.")
